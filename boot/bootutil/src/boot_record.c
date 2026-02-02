@@ -1,6 +1,7 @@
 /*
- * Copyright (c) 2018-2021 Arm Limited
+ * Copyright (c) 2018-2023 Arm Limited
  * Copyright (c) 2020 Linaro Limited
+ * Copyright (c) 2023, Nordic Semiconductor ASA
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,6 +23,10 @@
 #include <string.h>
 
 #include "mcuboot_config/mcuboot_config.h"
+#include "bootutil/crypto/sha.h"
+#ifdef MCUBOOT_HW_ROLLBACK_PROT
+#include "bootutil/security_cnt.h"
+#endif
 
 #if defined(MCUBOOT_MEASURED_BOOT) || defined(MCUBOOT_DATA_SHARING)
 #include "bootutil/boot_record.h"
@@ -30,12 +35,11 @@
 #include "bootutil/image.h"
 #include "flash_map_backend/flash_map_backend.h"
 
-/* Error codes for using the shared memory area. */
-#define SHARED_MEMORY_OK            (0)
-#define SHARED_MEMORY_OVERFLOW      (1)
-#define SHARED_MEMORY_OVERWRITE     (2)
-#define SHARED_MEMORY_GEN_ERROR     (3)
+#if defined(MCUBOOT_DATA_SHARING_BOOTINFO)
+static bool saved_bootinfo = false;
+#endif
 
+#if !defined(MCUBOOT_CUSTOM_DATA_SHARING_FUNCTION)
 /**
  * @var shared_memory_init_done
  *
@@ -117,6 +121,7 @@ boot_add_data_to_shared_area(uint8_t        major_type,
     return SHARED_MEMORY_OK;
 }
 #endif /* MCUBOOT_MEASURED_BOOT OR MCUBOOT_DATA_SHARING */
+#endif /* !MCUBOOT_CUSTOM_DATA_SHARING_FUNCTION */
 
 #ifdef MCUBOOT_MEASURED_BOOT
 /* See in boot_record.h */
@@ -132,7 +137,7 @@ boot_save_boot_status(uint8_t sw_module,
     uint16_t type;
     uint16_t ias_minor;
     size_t record_len = 0;
-    uint8_t image_hash[32]; /* SHA256 - 32 Bytes */
+    uint8_t image_hash[IMAGE_HASH_SIZE];
     uint8_t buf[MAX_BOOT_RECORD_SZ];
     bool boot_record_found = false;
     bool hash_found = false;
@@ -141,6 +146,9 @@ boot_save_boot_status(uint8_t sw_module,
     /* Manifest data is concatenated to the end of the image.
      * It is encoded in TLV format.
      */
+#if defined(MCUBOOT_SWAP_USING_OFFSET)
+    it.start_off = 0;
+#endif
 
     rc = bootutil_tlv_iter_begin(&it, hdr, fap, IMAGE_TLV_ANY, false);
     if (rc) {
@@ -170,7 +178,7 @@ boot_save_boot_status(uint8_t sw_module,
             record_len = len;
             boot_record_found = true;
 
-        } else if (type == IMAGE_TLV_SHA256) {
+        } else if (type == EXPECTED_HASH_TLV) {
             /* Get the image's hash value from the manifest section. */
             if (len > sizeof(image_hash)) {
                 return -1;
@@ -190,7 +198,6 @@ boot_save_boot_status(uint8_t sw_module,
             break;
         }
     }
-
 
     if (!boot_record_found || !hash_found) {
         return -1;
@@ -230,3 +237,163 @@ boot_save_boot_status(uint8_t sw_module,
     return 0;
 }
 #endif /* MCUBOOT_MEASURED_BOOT */
+
+#ifdef MCUBOOT_DATA_SHARING_BOOTINFO
+int boot_save_shared_data(const struct image_header *hdr, const struct flash_area *fap,
+                          const uint8_t slot, const struct image_max_size *max_app_sizes)
+{
+    int rc;
+#if !defined(MCUBOOT_SINGLE_APPLICATION_SLOT)
+    uint8_t image = 0;
+#ifdef MCUBOOT_HW_ROLLBACK_PROT
+    uint32_t security_cnt;
+    FIH_DECLARE(fih_rc, FIH_FAILURE);
+#endif
+#endif
+
+#if defined(MCUBOOT_SINGLE_APPLICATION_SLOT)
+    uint8_t mode = MCUBOOT_MODE_SINGLE_SLOT;
+#elif defined(MCUBOOT_SWAP_USING_SCRATCH)
+    uint8_t mode = MCUBOOT_MODE_SWAP_USING_SCRATCH;
+#elif defined(MCUBOOT_OVERWRITE_ONLY)
+    uint8_t mode = MCUBOOT_MODE_UPGRADE_ONLY;
+#elif defined(MCUBOOT_SWAP_USING_MOVE)
+    uint8_t mode = MCUBOOT_MODE_SWAP_USING_MOVE;
+#elif defined(MCUBOOT_SWAP_USING_OFFSET)
+    uint8_t mode = MCUBOOT_MODE_SWAP_USING_OFFSET;
+#elif defined(MCUBOOT_DIRECT_XIP)
+#if defined(MCUBOOT_DIRECT_XIP_REVERT)
+    uint8_t mode = MCUBOOT_MODE_DIRECT_XIP_WITH_REVERT;
+#else
+    uint8_t mode = MCUBOOT_MODE_DIRECT_XIP;
+#endif
+#elif defined(MCUBOOT_RAM_LOAD)
+    uint8_t mode = MCUBOOT_MODE_RAM_LOAD;
+#elif defined(MCUBOOT_FIRMWARE_LOADER)
+    uint8_t mode = MCUBOOT_MODE_FIRMWARE_LOADER;
+#elif defined(MCUBOOT_SINGLE_APPLICATION_SLOT_RAM_LOAD)
+    uint8_t mode = MCUBOOT_MODE_SINGLE_SLOT_RAM_LOAD;
+#else
+#error "Unknown mcuboot operating mode"
+#endif
+
+#if defined(MCUBOOT_SIGN_RSA)
+    uint8_t signature_type = MCUBOOT_SIGNATURE_TYPE_RSA;
+#elif defined(MCUBOOT_SIGN_EC256)
+    uint8_t signature_type = MCUBOOT_SIGNATURE_TYPE_ECDSA_P256;
+#elif defined(MCUBOOT_SIGN_ED25519)
+    uint8_t signature_type = MCUBOOT_SIGNATURE_TYPE_ED25519;
+#else
+    uint8_t signature_type = MCUBOOT_SIGNATURE_TYPE_NONE;
+#endif
+
+#if defined(MCUBOOT_SERIAL_RECOVERY)
+    uint8_t recovery = MCUBOOT_RECOVERY_MODE_SERIAL_RECOVERY;
+#elif defined(MCUBOOT_USB_DFU)
+    uint8_t recovery = MCUBOOT_RECOVERY_MODE_DFU;
+#else
+    uint8_t recovery = MCUBOOT_RECOVERY_MODE_NONE;
+#endif
+
+#if defined(MCUBOOT_VERSION_AVAILABLE)
+    struct image_version mcuboot_version = {
+        .iv_major = MCUBOOT_VERSION_MAJOR,
+        .iv_minor = MCUBOOT_VERSION_MINOR,
+
+#if defined(MCUBOOT_VERSION_PATCHLEVEL)
+        .iv_revision = MCUBOOT_VERSION_PATCHLEVEL,
+#else
+        .iv_revision = 0,
+#endif
+
+#if defined(MCUBOOT_VERSION_TWEAK)
+        .iv_build_num = MCUBOOT_VERSION_TWEAK,
+#else
+        .iv_build_num = 0,
+#endif
+    };
+#endif
+
+    if (saved_bootinfo) {
+        /* Boot info has already been saved, nothing to do */
+        return 0;
+    }
+
+    /* Write out all fields */
+    rc = boot_add_data_to_shared_area(TLV_MAJOR_BLINFO, BLINFO_MODE,
+                                      sizeof(mode), &mode);
+
+    if (!rc) {
+        rc = boot_add_data_to_shared_area(TLV_MAJOR_BLINFO,
+                                          BLINFO_SIGNATURE_TYPE,
+                                          sizeof(signature_type),
+                                          &signature_type);
+    }
+
+    if (!rc) {
+        rc = boot_add_data_to_shared_area(TLV_MAJOR_BLINFO,
+                                          BLINFO_RECOVERY,
+                                          sizeof(recovery), &recovery);
+    }
+
+#if !defined(MCUBOOT_SINGLE_APPLICATION_SLOT)
+    if (!rc) {
+        rc = boot_add_data_to_shared_area(TLV_MAJOR_BLINFO,
+                                          BLINFO_RUNNING_SLOT,
+                                          sizeof(slot), (void *)&slot);
+    }
+#endif
+
+#if defined(MCUBOOT_VERSION_AVAILABLE)
+    if (!rc) {
+        rc = boot_add_data_to_shared_area(TLV_MAJOR_BLINFO,
+                                          BLINFO_BOOTLOADER_VERSION,
+                                          sizeof(mcuboot_version),
+                                          (void *)&mcuboot_version);
+    }
+#endif
+
+#if !defined(MCUBOOT_SINGLE_APPLICATION_SLOT) && defined(MCUBOOT_HW_ROLLBACK_PROT)
+    image = 0;
+    while (image < BOOT_IMAGE_NUMBER && !rc) {
+        FIH_CALL(boot_nv_security_counter_get, fih_rc, image, &security_cnt);
+        if (FIH_NOT_EQ(fih_rc, FIH_SUCCESS)) {
+            /* Some platforms support only a single security counter. */
+            continue;
+        }
+
+        rc = boot_add_data_to_shared_area(TLV_MAJOR_BLINFO,
+                                          BLINFO_SECURITY_COUNTER_IMAGE_0 + image,
+                                          sizeof(security_cnt),
+                                          (void *)&security_cnt);
+        if (!rc) {
+            break;
+        }
+        ++image;
+    }
+#endif /* !defined(MCUBOOT_SINGLE_APPLICATION_SLOT) && defined(MCUBOOT_HW_ROLLBACK_PROT) */
+
+#if !defined(MCUBOOT_SINGLE_APPLICATION_SLOT)
+    image = 0;
+    while (image < BOOT_IMAGE_NUMBER && !rc) {
+        if (max_app_sizes[image].calculated == true) {
+            rc = boot_add_data_to_shared_area(TLV_MAJOR_BLINFO,
+                                              (BLINFO_MAX_APPLICATION_SIZE + image),
+                                              sizeof(max_app_sizes[image].max_size),
+                                              (void *)&max_app_sizes[image].max_size);
+            if (!rc) {
+                break;
+            }
+        }
+
+        ++image;
+    }
+#endif
+
+    if (!rc) {
+        saved_bootinfo = true;
+    }
+
+    return rc;
+}
+#endif /* MCUBOOT_DATA_SHARING_BOOTINFO */

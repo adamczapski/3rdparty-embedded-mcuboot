@@ -11,12 +11,12 @@
  * not to optimize the double check. Value doesn't matter.
  */
 volatile int _fih_mask = _FIH_MASK_VALUE;
-fih_int FIH_SUCCESS = {FIH_POSITIVE_VALUE, _FIH_MASK_VALUE ^ FIH_POSITIVE_VALUE};
-fih_int FIH_FAILURE = {FIH_NEGATIVE_VALUE, _FIH_MASK_VALUE ^ FIH_NEGATIVE_VALUE};
-#else
-fih_int FIH_SUCCESS = {FIH_POSITIVE_VALUE};
-fih_int FIH_FAILURE = {FIH_NEGATIVE_VALUE};
 #endif /* FIH_ENABLE_DOUBLE_VARS */
+
+fih_ret FIH_SUCCESS = FIH_POSITIVE_VALUE;
+fih_ret FIH_FAILURE = FIH_NEGATIVE_VALUE;
+fih_ret FIH_NO_BOOTABLE_IMAGE = FIH_CONST1;
+fih_ret FIH_BOOT_HOOK_REGULAR = FIH_CONST2;
 
 #ifdef FIH_ENABLE_CFI
 
@@ -63,6 +63,7 @@ void fih_cfi_decrement(void)
  */
 __attribute__((used))
 __attribute__((noinline))
+__attribute__((noreturn))
 void fih_panic_loop(void)
 {
     __asm volatile ("b fih_panic_loop");
@@ -74,5 +75,10 @@ void fih_panic_loop(void)
     __asm volatile ("b fih_panic_loop");
     __asm volatile ("b fih_panic_loop");
     __asm volatile ("b fih_panic_loop");
+
+    /* An infinite loop to suppress compiler warnings
+     * about the return of a noreturn function
+     */
+    while (1) {}
 }
 #endif /* FIH_ENABLE_GLOBAL_FAIL */

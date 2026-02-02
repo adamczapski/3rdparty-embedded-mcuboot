@@ -24,12 +24,22 @@ sig-ecdsa = []
 # Verify ECDSA (secp256r1) signatures using mbed TLS
 sig-ecdsa-mbedtls = []
 
+# Verify ECDSA (p256 or p384) signatures using PSA Crypto API
+sig-ecdsa-psa = []
+
+# Enable P384 Curve support (instead of P256) for PSA Crypto
+sig-p384 = []
+
 # Verify ED25519 signatures.
 sig-ed25519 = []
 
 # Overwrite only upgrade
 overwrite-only = []
 
+# Swap using offset mode
+swap-offset = []
+
+# Swap using move move
 swap-move = []
 
 # Disable validation of the primary slot
@@ -80,8 +90,20 @@ direct-xip = []
 # Check (in software) against version downgrades.
 downgrade-prevention = []
 
+# Support images with 16-byte maximum write alignment value.
+max-align-16 = []
+
 # Support images with 32-byte maximum write alignment value.
 max-align-32 = []
+
+# Enable hardware rollback protection
+hw-rollback-protection = []
+
+# Enable the PSA Crypto APIs where supported for cryptography related operations.
+psa-crypto-api = []
+
+# Test for ih_load_addr in upgrade/next boot slot
+check-load-addr = []
 
 [build-dependencies]
 cc = "1.0.25"

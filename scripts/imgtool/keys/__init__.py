@@ -1,4 +1,5 @@
 # Copyright 2017 Linaro Limited
+# Copyright 2023 Arm Limited
 #
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -20,29 +21,46 @@ Cryptographic key management for imgtool.
 
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.rsa import (
-    RSAPrivateKey, RSAPublicKey)
 from cryptography.hazmat.primitives.asymmetric.ec import (
-    EllipticCurvePrivateKey, EllipticCurvePublicKey)
-from cryptography.hazmat.primitives.asymmetric.ed25519 import (
-    Ed25519PrivateKey, Ed25519PublicKey)
-from cryptography.hazmat.primitives.asymmetric.x25519 import (
-    X25519PrivateKey, X25519PublicKey)
+    EllipticCurvePrivateKey,
+    EllipticCurvePublicKey,
+)
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, RSAPublicKey
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
 
-from .rsa import RSA, RSAPublic, RSAUsageError, RSA_KEY_SIZES
-from .ecdsa import ECDSA256P1, ECDSA256P1Public, ECDSAUsageError
+from .ecdsa import ECDSA256P1, ECDSA384P1, ECDSA256P1Public, ECDSA384P1Public, ECDSAUsageError
 from .ed25519 import Ed25519, Ed25519Public, Ed25519UsageError
+from .rsa import RSA, RSA_KEY_SIZES, RSAPublic, RSAUsageError
 from .x25519 import X25519, X25519Public, X25519UsageError
+
+__all__ = [
+    "ECDSA256P1",
+    "ECDSA384P1",
+    "ECDSA256P1Public",
+    "ECDSA384P1Public",
+    "ECDSAUsageError",
+    "Ed25519",
+    "Ed25519Public",
+    "Ed25519UsageError",
+    "RSA",
+    "RSA_KEY_SIZES",
+    "RSAPublic",
+    "RSAUsageError",
+    "X25519",
+    "X25519Public",
+    "X25519UsageError",
+]
 
 
 class PasswordRequired(Exception):
     """Raised to indicate that the key is password protected, but a
     password was not specified."""
-    pass
 
 
 def load(path, passwd=None):
-    """Try loading a key from the given path.  Returns None if the password wasn't specified."""
+    """Try loading a key from the given path.
+      Returns None if the password wasn't specified."""
     with open(path, 'rb') as f:
         raw_pem = f.read()
     try:
@@ -73,17 +91,23 @@ def load(path, passwd=None):
             raise Exception("Unsupported RSA key size: " + pk.key_size)
         return RSAPublic(pk)
     elif isinstance(pk, EllipticCurvePrivateKey):
-        if pk.curve.name != 'secp256r1':
+        if pk.curve.name not in ('secp256r1', 'secp384r1'):
             raise Exception("Unsupported EC curve: " + pk.curve.name)
-        if pk.key_size != 256:
+        if pk.key_size not in (256, 384):
             raise Exception("Unsupported EC size: " + pk.key_size)
-        return ECDSA256P1(pk)
+        if pk.curve.name == 'secp256r1':
+            return ECDSA256P1(pk)
+        elif pk.curve.name == 'secp384r1':
+            return ECDSA384P1(pk)
     elif isinstance(pk, EllipticCurvePublicKey):
-        if pk.curve.name != 'secp256r1':
+        if pk.curve.name not in ('secp256r1', 'secp384r1'):
             raise Exception("Unsupported EC curve: " + pk.curve.name)
-        if pk.key_size != 256:
+        if pk.key_size not in (256, 384):
             raise Exception("Unsupported EC size: " + pk.key_size)
-        return ECDSA256P1Public(pk)
+        if pk.curve.name == 'secp256r1':
+            return ECDSA256P1Public(pk)
+        elif pk.curve.name == 'secp384r1':
+            return ECDSA384P1Public(pk)
     elif isinstance(pk, Ed25519PrivateKey):
         return Ed25519(pk)
     elif isinstance(pk, Ed25519PublicKey):

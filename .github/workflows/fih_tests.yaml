@@ -13,13 +13,17 @@ concurrency:
 jobs:
   config:
     strategy:
+      fail-fast: false
       matrix:
         fih_env:
         # FIH environment must use the following space separated format:
         #   BUILD_TYPE SKIP_SIZE DAMAGE_TYPE FIH_LEVEL(optional)
-        - "RELEASE 2,4,6,8,10 SIGNATURE"
-        - "RELEASE 2,4,6,8,10 SIGNATURE LOW"
-        - "RELEASE 2,4,6,8,10 SIGNATURE MEDIUM"
+        - "RELEASE 2,4,6 SIGNATURE"
+        - "RELEASE 2,4,6 SIGNATURE LOW"
+        - "RELEASE 2,4,6 SIGNATURE MEDIUM"
+        - "RELEASE 8,10 SIGNATURE"
+        - "RELEASE 8,10 SIGNATURE LOW"
+        - "RELEASE 8,10 SIGNATURE MEDIUM"
         - "MINSIZEREL 2,4,6 SIGNATURE"
         - "MINSIZEREL 2,4,6 SIGNATURE LOW"
         - "MINSIZEREL 2,4,6 SIGNATURE MEDIUM"
@@ -43,6 +47,12 @@ jobs:
       if: ${{ github.event_name == 'pull_request' }}
       run: |
         ./ci/check-signed-off-by.sh
+    - name: Authenticate to GH Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     - name: FIH hardening test install
       run: |
         ./ci/fih-tests_install.sh

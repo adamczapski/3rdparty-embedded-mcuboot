@@ -16,25 +16,38 @@
 
 import argparse
 import os.path
-import toml
-
-parser = argparse.ArgumentParser(description='Print features from a Cargo.toml.')
-parser.add_argument('infile', help='Input file to parse')
-
-args = parser.parse_args()
-if not os.path.isfile(args.infile):
-    print("File not found")
-    exit(1)
+import sys
 
 try:
-    cargo_toml = open(args.infile).read()
-except Exception:
-    print("Error reading \"{}\"".format(args.infile))
-    exit(1)
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
 
-config = toml.loads(cargo_toml)
-if 'features' not in config:
-    print("Missing \"[features]\" section")
-    exit(1)
 
-print(" ".join([k for k in config['features'] if k != 'default']))
+def main() -> int:
+    parser = argparse.ArgumentParser(description='Print features from a Cargo.toml.')
+    parser.add_argument('infile', help='Input file to parse')
+
+    args = parser.parse_args()
+    if not os.path.isfile(args.infile):
+        print("File not found")
+        return 1
+
+    try:
+        with open(args.infile) as file:
+            cargo_toml = file.read()
+    except Exception:
+        print(f"Error reading \"{args.infile}\"")
+        return 1
+
+    config = tomllib.loads(cargo_toml)
+    if 'features' not in config:
+        print("Missing \"[features]\" section")
+        return 1
+
+    print(" ".join([k for k in config['features'] if k != 'default']))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

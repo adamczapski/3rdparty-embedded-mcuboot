@@ -10,13 +10,17 @@ use std::path::{Path, PathBuf};
 
 fn main() {
     // Feature flags.
+    let psa_crypto_api = env::var("CARGO_FEATURE_PSA_CRYPTO_API").is_ok();
     let sig_rsa = env::var("CARGO_FEATURE_SIG_RSA").is_ok();
     let sig_rsa3072 = env::var("CARGO_FEATURE_SIG_RSA3072").is_ok();
     let sig_ecdsa = env::var("CARGO_FEATURE_SIG_ECDSA").is_ok();
     let sig_ecdsa_mbedtls = env::var("CARGO_FEATURE_SIG_ECDSA_MBEDTLS").is_ok();
+    let sig_ecdsa_psa = env::var("CARGO_FEATURE_SIG_ECDSA_PSA").is_ok();
+    let sig_p384 = env::var("CARGO_FEATURE_SIG_P384").is_ok();
     let sig_ed25519 = env::var("CARGO_FEATURE_SIG_ED25519").is_ok();
     let overwrite_only = env::var("CARGO_FEATURE_OVERWRITE_ONLY").is_ok();
     let swap_move = env::var("CARGO_FEATURE_SWAP_MOVE").is_ok();
+    let swap_offset = env::var("CARGO_FEATURE_SWAP_OFFSET").is_ok();
     let validate_primary_slot =
                   env::var("CARGO_FEATURE_VALIDATE_PRIMARY_SLOT").is_ok();
     let enc_rsa = env::var("CARGO_FEATURE_ENC_RSA").is_ok();
@@ -33,7 +37,10 @@ fn main() {
     let downgrade_prevention = env::var("CARGO_FEATURE_DOWNGRADE_PREVENTION").is_ok();
     let ram_load = env::var("CARGO_FEATURE_RAM_LOAD").is_ok();
     let direct_xip = env::var("CARGO_FEATURE_DIRECT_XIP").is_ok();
+    let max_align_16 = env::var("CARGO_FEATURE_MAX_ALIGN_16").is_ok();
     let max_align_32 = env::var("CARGO_FEATURE_MAX_ALIGN_32").is_ok();
+    let hw_rollback_protection = env::var("CARGO_FEATURE_HW_ROLLBACK_PROTECTION").is_ok();
+    let check_load_addr = env::var("CARGO_FEATURE_CHECK_LOAD_ADDR").is_ok();
 
     let mut conf = CachedBuild::new();
     conf.conf.define("__BOOTSIM__", None);
@@ -44,6 +51,8 @@ fn main() {
 
     if max_align_32 {
         conf.conf.define("MCUBOOT_BOOT_MAX_ALIGN", Some("32"));
+    } else if max_align_16 {
+        conf.conf.define("MCUBOOT_BOOT_MAX_ALIGN", Some("16"));
     } else {
         conf.conf.define("MCUBOOT_BOOT_MAX_ALIGN", Some("8"));
     }
@@ -57,6 +66,10 @@ fn main() {
     if bootstrap {
         conf.conf.define("MCUBOOT_BOOTSTRAP", None);
         conf.conf.define("MCUBOOT_OVERWRITE_ONLY_FAST", None);
+    }
+
+    if check_load_addr {
+        conf.conf.define("MCUBOOT_CHECK_HEADER_LOAD_ADDRESS", None);
     }
 
     if validate_primary_slot {
@@ -75,10 +88,76 @@ fn main() {
         conf.conf.define("MCUBOOT_DIRECT_XIP", None);
     }
 
+    if hw_rollback_protection {
+        conf.conf.define("MCUBOOT_HW_ROLLBACK_PROT", None);
+        conf.file("csupport/security_cnt.c");
+    }
+
     // Currently no more than one sig type can be used simultaneously.
     if vec![sig_rsa, sig_rsa3072, sig_ecdsa, sig_ed25519].iter()
         .fold(0, |sum, &v| sum + v as i32) > 1 {
         panic!("mcuboot does not support more than one sig type at the same time");
+    }
+
+    if psa_crypto_api {
+        if sig_ecdsa || enc_ec256 || enc_x25519 ||
+                enc_aes256_ec256 || sig_ecdsa_mbedtls || enc_aes256_x25519 ||
+                enc_kw  || enc_aes256_kw {
+            conf.file("csupport/psa_crypto_init_stub.c");
+        } else {
+            conf.conf.define("MCUBOOT_USE_PSA_CRYPTO", None);
+            conf.file("../../ext/mbedtls/library/aes.c");
+            conf.file("../../ext/mbedtls/library/aesni.c");
+            conf.file("../../ext/mbedtls/library/aria.c");
+            conf.file("../../ext/mbedtls/library/asn1write.c");
+            conf.file("../../ext/mbedtls/library/base64.c");
+            conf.file("../../ext/mbedtls/library/camellia.c");
+            conf.file("../../ext/mbedtls/library/ccm.c");
+            conf.file("../../ext/mbedtls/library/chacha20.c");
+            conf.file("../../ext/mbedtls/library/chachapoly.c");
+            conf.file("../../ext/mbedtls/library/cipher.c");
+            conf.file("../../ext/mbedtls/library/cipher_wrap.c");
+            conf.file("../../ext/mbedtls/library/constant_time.c");
+            conf.file("../../ext/mbedtls/library/ctr_drbg.c");
+            conf.file("../../ext/mbedtls/library/des.c");
+            conf.file("../../ext/mbedtls/library/ecdsa.c");
+            conf.file("../../ext/mbedtls/library/ecp.c");
+            conf.file("../../ext/mbedtls/library/ecp_curves.c");
+            conf.file("../../ext/mbedtls/library/entropy.c");
+            conf.file("../../ext/mbedtls/library/entropy_poll.c");
+            conf.file("../../ext/mbedtls/library/gcm.c");
+            conf.file("../../ext/mbedtls/library/md5.c");
+            conf.file("../../ext/mbedtls/library/nist_kw.c");
+            conf.file("../../ext/mbedtls/library/oid.c");
+            conf.file("../../ext/mbedtls/library/pem.c");
+            conf.file("../../ext/mbedtls/library/pk.c");
+            conf.file("../../ext/mbedtls/library/pkcs5.c");
+            conf.file("../../ext/mbedtls/library/pkcs12.c");
+            conf.file("../../ext/mbedtls/library/pkparse.c");
+            conf.file("../../ext/mbedtls/library/pk_wrap.c");
+            conf.file("../../ext/mbedtls/library/pkwrite.c");
+            conf.file("../../ext/mbedtls/library/poly1305.c");
+            conf.file("../../ext/mbedtls/library/psa_crypto.c");
+            conf.file("../../ext/mbedtls/library/psa_crypto_cipher.c");
+            conf.file("../../ext/mbedtls/library/psa_crypto_client.c");
+            conf.file("../../ext/mbedtls/library/psa_crypto_ecp.c");
+            conf.file("../../ext/mbedtls/library/psa_crypto_hash.c");
+            conf.file("../../ext/mbedtls/library/psa_crypto_mac.c");
+            conf.file("../../ext/mbedtls/library/psa_crypto_rsa.c");
+            conf.file("../../ext/mbedtls/library/psa_crypto_slot_management.c");
+            conf.file("../../ext/mbedtls/library/psa_crypto_storage.c");
+            conf.file("../../ext/mbedtls/library/psa_its_file.c");
+            conf.file("../../ext/mbedtls/library/psa_util.c");
+            conf.file("../../ext/mbedtls/library/ripemd160.c");
+            conf.file("../../ext/mbedtls/library/rsa_alt_helpers.c");
+            conf.file("../../ext/mbedtls/library/sha1.c");
+            conf.file("../../ext/mbedtls/library/sha512.c");
+            conf.file("../../ext/mbedtls/tests/src/random.c");
+            conf.conf.include("../../ext/mbedtls/library");
+        }
+
+        conf.conf.include("../../ext/mbedtls/tests/include/");
+        conf.file("../../ext/mbedtls/tests/src/fake_external_rng_for_test.c");
     }
 
     if sig_rsa || sig_rsa3072 {
@@ -100,9 +179,14 @@ fn main() {
 
         conf.file("../../ext/mbedtls/library/rsa.c");
         conf.file("../../ext/mbedtls/library/bignum.c");
+        conf.file("../../ext/mbedtls/library/bignum_core.c");
+        conf.file("../../ext/mbedtls/library/constant_time.c");
+        conf.file("../../ext/mbedtls/library/nist_kw.c");
         conf.file("../../ext/mbedtls/library/platform.c");
         conf.file("../../ext/mbedtls/library/platform_util.c");
         conf.file("../../ext/mbedtls/library/asn1parse.c");
+        conf.file("../../ext/mbedtls/library/md.c");
+
     } else if sig_ecdsa {
         conf.conf.define("MCUBOOT_SIGN_EC256", None);
         conf.conf.define("MCUBOOT_USE_TINYCRYPT", None);
@@ -131,7 +215,31 @@ fn main() {
 
         conf.file("../../ext/mbedtls/library/asn1parse.c");
         conf.file("../../ext/mbedtls/library/bignum.c");
+        conf.file("../../ext/mbedtls/library/bignum_core.c");
+        conf.file("../../ext/mbedtls/library/constant_time.c");
+        conf.file("../../ext/mbedtls/library/nist_kw.c");
         conf.file("../../ext/mbedtls/library/ecdsa.c");
+        conf.file("../../ext/mbedtls/library/ecp.c");
+        conf.file("../../ext/mbedtls/library/ecp_curves.c");
+        conf.file("../../ext/mbedtls/library/platform.c");
+        conf.file("../../ext/mbedtls/library/platform_util.c");
+    } else if sig_ecdsa_psa {
+        conf.conf.include("../../ext/mbedtls/include");
+
+        if sig_p384 {
+            conf.conf.define("MCUBOOT_SIGN_EC384", None);
+            conf.file("../../ext/mbedtls/library/sha512.c");
+        } else {
+            conf.conf.define("MCUBOOT_SIGN_EC256", None);
+            conf.file("../../ext/mbedtls/library/sha256.c");
+        }
+
+        conf.file("csupport/keys.c");
+        conf.file("../../ext/mbedtls/library/asn1parse.c");
+        conf.file("../../ext/mbedtls/library/bignum.c");
+        conf.file("../../ext/mbedtls/library/bignum_core.c");
+        conf.file("../../ext/mbedtls/library/constant_time.c");
+        conf.file("../../ext/mbedtls/library/nist_kw.c");
         conf.file("../../ext/mbedtls/library/ecp.c");
         conf.file("../../ext/mbedtls/library/ecp_curves.c");
         conf.file("../../ext/mbedtls/library/platform.c");
@@ -164,9 +272,11 @@ fn main() {
         conf.conf.define("MCUBOOT_OVERWRITE_ONLY", None);
     }
 
-    if swap_move {
+    if swap_offset {
+        conf.conf.define("MCUBOOT_SWAP_USING_OFFSET", None);
+    } else if swap_move {
         conf.conf.define("MCUBOOT_SWAP_USING_MOVE", None);
-    } else if !overwrite_only {
+    } else if !overwrite_only && !direct_xip && !ram_load {
         conf.conf.define("CONFIG_BOOT_SWAP_USING_SCRATCH", None);
         conf.conf.define("MCUBOOT_SWAP_USING_SCRATCH", None);
     }
@@ -193,6 +303,9 @@ fn main() {
         conf.file("../../ext/mbedtls/library/md.c");
         conf.file("../../ext/mbedtls/library/aes.c");
         conf.file("../../ext/mbedtls/library/bignum.c");
+        conf.file("../../ext/mbedtls/library/bignum_core.c");
+        conf.file("../../ext/mbedtls/library/constant_time.c");
+        conf.file("../../ext/mbedtls/library/nist_kw.c");
         conf.file("../../ext/mbedtls/library/asn1parse.c");
     }
 
@@ -216,6 +329,7 @@ fn main() {
         conf.conf.include("../../ext/mbedtls/library");
         conf.file("../../ext/mbedtls/library/platform_util.c");
         conf.file("../../ext/mbedtls/library/nist_kw.c");
+        conf.file("../../ext/mbedtls/library/constant_time.c");
         conf.file("../../ext/mbedtls/library/cipher.c");
         conf.file("../../ext/mbedtls/library/cipher_wrap.c");
         conf.file("../../ext/mbedtls/library/aes.c");
@@ -280,6 +394,9 @@ fn main() {
         conf.file("../../ext/mbedtls/library/sha256.c");
         conf.file("../../ext/mbedtls/library/asn1parse.c");
         conf.file("../../ext/mbedtls/library/bignum.c");
+        conf.file("../../ext/mbedtls/library/bignum_core.c");
+        conf.file("../../ext/mbedtls/library/constant_time.c");
+        conf.file("../../ext/mbedtls/library/nist_kw.c");
         conf.file("../../ext/mbedtls/library/ecdh.c");
         conf.file("../../ext/mbedtls/library/md.c");
         conf.file("../../ext/mbedtls/library/aes.c");
@@ -352,23 +469,34 @@ fn main() {
         conf.conf.define("MBEDTLS_CONFIG_FILE", Some("<config-kw.h>"));
     } else if enc_aes256_x25519 {
         conf.conf.define("MBEDTLS_CONFIG_FILE", Some("<config-ed25519.h>"));
+    } else if sig_ecdsa_psa {
+        conf.conf.define("MBEDTLS_CONFIG_FILE", Some("<config-ec-psa.h>"));
     }
 
     conf.file("../../boot/bootutil/src/image_validate.c");
+    conf.file("../../boot/bootutil/src/bootutil_find_key.c");
+    conf.file("../../boot/bootutil/src/bootutil_img_hash.c");
+    conf.file("../../boot/bootutil/src/bootutil_img_security_cnt.c");
     if sig_rsa || sig_rsa3072 {
         conf.file("../../boot/bootutil/src/image_rsa.c");
-    } else if sig_ecdsa || sig_ecdsa_mbedtls {
-        conf.conf.include("../../ext/mbedtls/include");
-        conf.file("../../boot/bootutil/src/image_ec256.c");
+    } else if sig_ecdsa || sig_ecdsa_mbedtls || sig_ecdsa_psa {
+        conf.file("../../boot/bootutil/src/image_ecdsa.c");
     } else if sig_ed25519 {
         conf.file("../../boot/bootutil/src/image_ed25519.c");
     }
+
     conf.file("../../boot/bootutil/src/loader.c");
+    if ram_load {
+        conf.file("../../boot/bootutil/src/ram_load.c");
+    }
     conf.file("../../boot/bootutil/src/swap_misc.c");
     conf.file("../../boot/bootutil/src/swap_scratch.c");
     conf.file("../../boot/bootutil/src/swap_move.c");
+    conf.file("../../boot/bootutil/src/swap_offset.c");
     conf.file("../../boot/bootutil/src/caps.c");
     conf.file("../../boot/bootutil/src/bootutil_misc.c");
+    conf.file("../../boot/bootutil/src/bootutil_area.c");
+    conf.file("../../boot/bootutil/src/bootutil_loader.c");
     conf.file("../../boot/bootutil/src/bootutil_public.c");
     conf.file("../../boot/bootutil/src/tlv.c");
     conf.file("../../boot/bootutil/src/fault_injection_hardening.c");

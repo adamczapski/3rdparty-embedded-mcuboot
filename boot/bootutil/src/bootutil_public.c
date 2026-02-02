@@ -3,8 +3,8 @@
  *
  * Copyright (c) 2017-2019 Linaro LTD
  * Copyright (c) 2016-2019 JUUL Labs
- * Copyright (c) 2019-2021 Arm Limited
- * Copyright (c) 2020 Nordic Semiconductor ASA
+ * Copyright (c) 2019-2023 Arm Limited
+ * Copyright (c) 2020-2025 Nordic Semiconductor ASA
  *
  * Original license:
  *
@@ -49,6 +49,7 @@
 
 #include "bootutil/boot_public_hooks.h"
 #include "bootutil_priv.h"
+#include "bootutil_misc.h"
 
 #ifdef CONFIG_MCUBOOT
 BOOT_LOG_MODULE_DECLARE(mcuboot);
@@ -83,6 +84,9 @@ struct boot_swap_table {
     uint8_t image_ok_primary_slot;
     uint8_t image_ok_secondary_slot;
     uint8_t copy_done_primary_slot;
+#if defined(MCUBOOT_SWAP_USING_OFFSET)
+    uint8_t copy_done_secondary_slot;
+#endif
 
     uint8_t swap_type;
 };
@@ -99,12 +103,26 @@ struct boot_swap_table {
  * the bootloader, as in starting/finishing a swap operation.
  */
 static const struct boot_swap_table boot_swap_tables[] = {
+#if defined(MCUBOOT_SWAP_USING_OFFSET)
     {
         .magic_primary_slot =       BOOT_MAGIC_ANY,
         .magic_secondary_slot =     BOOT_MAGIC_GOOD,
         .image_ok_primary_slot =    BOOT_FLAG_ANY,
         .image_ok_secondary_slot =  BOOT_FLAG_UNSET,
         .copy_done_primary_slot =   BOOT_FLAG_ANY,
+        .copy_done_secondary_slot = BOOT_FLAG_SET,
+        .swap_type =                BOOT_SWAP_TYPE_REVERT,
+    },
+#endif
+    {
+        .magic_primary_slot =       BOOT_MAGIC_ANY,
+        .magic_secondary_slot =     BOOT_MAGIC_GOOD,
+        .image_ok_primary_slot =    BOOT_FLAG_ANY,
+        .image_ok_secondary_slot =  BOOT_FLAG_UNSET,
+        .copy_done_primary_slot =   BOOT_FLAG_ANY,
+#if defined(MCUBOOT_SWAP_USING_OFFSET)
+        .copy_done_secondary_slot = BOOT_FLAG_ANY,
+#endif
         .swap_type =                BOOT_SWAP_TYPE_TEST,
     },
     {
@@ -113,14 +131,20 @@ static const struct boot_swap_table boot_swap_tables[] = {
         .image_ok_primary_slot =    BOOT_FLAG_ANY,
         .image_ok_secondary_slot =  BOOT_FLAG_SET,
         .copy_done_primary_slot =   BOOT_FLAG_ANY,
+#if defined(MCUBOOT_SWAP_USING_OFFSET)
+        .copy_done_secondary_slot = BOOT_FLAG_ANY,
+#endif
         .swap_type =                BOOT_SWAP_TYPE_PERM,
     },
     {
         .magic_primary_slot =       BOOT_MAGIC_GOOD,
-        .magic_secondary_slot =     BOOT_MAGIC_UNSET,
+        .magic_secondary_slot =     BOOT_MAGIC_ANY,
         .image_ok_primary_slot =    BOOT_FLAG_UNSET,
         .image_ok_secondary_slot =  BOOT_FLAG_ANY,
         .copy_done_primary_slot =   BOOT_FLAG_SET,
+#if defined(MCUBOOT_SWAP_USING_OFFSET)
+        .copy_done_secondary_slot = BOOT_FLAG_ANY,
+#endif
         .swap_type =                BOOT_SWAP_TYPE_REVERT,
     },
 };
@@ -129,39 +153,12 @@ static const struct boot_swap_table boot_swap_tables[] = {
     (sizeof boot_swap_tables / sizeof boot_swap_tables[0])
 
 static int
-boot_magic_decode(const uint8_t *magic)
-{
-    if (memcmp(magic, BOOT_IMG_MAGIC, BOOT_MAGIC_SZ) == 0) {
-        return BOOT_MAGIC_GOOD;
-    }
-    return BOOT_MAGIC_BAD;
-}
-
-static int
 boot_flag_decode(uint8_t flag)
 {
     if (flag != BOOT_FLAG_SET) {
         return BOOT_FLAG_BAD;
     }
     return BOOT_FLAG_SET;
-}
-
-static inline uint32_t
-boot_magic_off(const struct flash_area *fap)
-{
-    return flash_area_get_size(fap) - BOOT_MAGIC_SZ;
-}
-
-static inline uint32_t
-boot_image_ok_off(const struct flash_area *fap)
-{
-    return ALIGN_DOWN(boot_magic_off(fap) - BOOT_MAX_ALIGN, BOOT_MAX_ALIGN);
-}
-
-static inline uint32_t
-boot_copy_done_off(const struct flash_area *fap)
-{
-    return boot_image_ok_off(fap) - BOOT_MAX_ALIGN;
 }
 
 uint32_t
@@ -327,7 +324,7 @@ boot_write_magic(const struct flash_area *fap)
     memset(&magic[0], erased_val, sizeof(magic));
     memcpy(&magic[BOOT_MAGIC_ALIGN_SIZE - BOOT_MAGIC_SZ], BOOT_IMG_MAGIC, BOOT_MAGIC_SZ);
 
-    BOOT_LOG_DBG("writing magic; fa_id=%d off=0x%lx (0x%lx)",
+    BOOT_LOG_DBG("boot_write_magic: fa_id=%d off=0x%lx (0x%lx)",
                  flash_area_get_id(fap), (unsigned long)off,
                  (unsigned long)(flash_area_get_off(fap) + off));
     rc = flash_area_write(fap, pad_off, &magic[0], BOOT_MAGIC_ALIGN_SIZE);
@@ -353,9 +350,14 @@ boot_write_trailer(const struct flash_area *fap, uint32_t off,
     uint32_t align;
     int rc;
 
+    BOOT_LOG_DBG("boot_write_trailer: for %p at %" PRIu32 ", size = %d",
+                 fap, off, inlen);
+
     align = flash_area_align(fap);
     align = ALIGN_UP(inlen, align);
     if (align > BOOT_MAX_ALIGN) {
+        /* This should never happen */
+        assert(0);
         return -1;
     }
     erased_val = flash_area_erased_val(fap);
@@ -465,8 +467,13 @@ boot_swap_type_multi(int image_index)
             (table->image_ok_secondary_slot == BOOT_FLAG_ANY ||
                 table->image_ok_secondary_slot == secondary_slot.image_ok) &&
             (table->copy_done_primary_slot == BOOT_FLAG_ANY  ||
-                table->copy_done_primary_slot == primary_slot.copy_done)) {
-            BOOT_LOG_INF("Swap type: %s",
+                table->copy_done_primary_slot == primary_slot.copy_done)
+#if defined(MCUBOOT_SWAP_USING_OFFSET)
+            && (table->copy_done_secondary_slot == BOOT_FLAG_ANY  ||
+                table->copy_done_secondary_slot == secondary_slot.copy_done)
+#endif
+            ) {
+            BOOT_LOG_INF("Image index: %d, Swap type: %s", image_index,
                          table->swap_type == BOOT_SWAP_TYPE_TEST   ? "test"   :
                          table->swap_type == BOOT_SWAP_TYPE_PERM   ? "perm"   :
                          table->swap_type == BOOT_SWAP_TYPE_REVERT ? "revert" :
@@ -480,9 +487,180 @@ boot_swap_type_multi(int image_index)
         }
     }
 
-    BOOT_LOG_INF("Swap type: none");
+    BOOT_LOG_INF("Image index: %d, Swap type: none", image_index);
     return BOOT_SWAP_TYPE_NONE;
 }
+
+int
+boot_write_copy_done(const struct flash_area *fap)
+{
+    uint32_t off;
+
+    off = boot_copy_done_off(fap);
+    BOOT_LOG_DBG("writing copy_done; fa_id=%d off=0x%lx (0x%lx)",
+                 flash_area_get_id(fap), (unsigned long)off,
+                 (unsigned long)(flash_area_get_off(fap) + off));
+    return boot_write_trailer_flag(fap, off, BOOT_FLAG_SET);
+}
+
+#ifndef MCUBOOT_BOOTUTIL_LIB_FOR_DIRECT_XIP
+
+static int flash_area_to_image(const struct flash_area *fa)
+{
+#if BOOT_IMAGE_NUMBER > 1
+    uint8_t i = 0;
+    int id = flash_area_get_id(fa);
+
+    while (i < BOOT_IMAGE_NUMBER) {
+        if (FLASH_AREA_IMAGE_PRIMARY(i) == id || (FLASH_AREA_IMAGE_SECONDARY(i) == id)) {
+            return i;
+        }
+
+        ++i;
+    }
+#else
+    (void)fa;
+#endif
+    return 0;
+}
+
+int
+boot_set_next(const struct flash_area *fa, bool active, bool confirm)
+{
+    struct boot_swap_state slot_state;
+    int rc;
+
+    if (active) {
+        confirm = true;
+    }
+
+    rc = boot_read_swap_state(fa, &slot_state);
+    if (rc != 0) {
+        return rc;
+    }
+
+    switch (slot_state.magic) {
+    case BOOT_MAGIC_GOOD:
+        /* If non-active then swap already scheduled, else confirm needed.*/
+
+        if (active && slot_state.image_ok == BOOT_FLAG_UNSET) {
+            /* Intentionally do not check copy_done flag to be able to
+             * confirm a padded image which has been programmed using
+             * a programming interface.
+             */
+            rc = boot_write_image_ok(fa);
+        }
+
+        break;
+
+    case BOOT_MAGIC_UNSET:
+        if (!active) {
+            rc = boot_write_magic(fa);
+
+            if (rc == 0 && confirm) {
+                rc = boot_write_image_ok(fa);
+            }
+
+            if (rc == 0) {
+                uint8_t swap_type;
+
+                if (confirm) {
+                    swap_type = BOOT_SWAP_TYPE_PERM;
+                } else {
+                    swap_type = BOOT_SWAP_TYPE_TEST;
+                }
+                rc = boot_write_swap_info(fa, swap_type, flash_area_to_image(fa));
+            }
+        }
+        break;
+
+    case BOOT_MAGIC_BAD:
+        if (active) {
+            rc = BOOT_EBADVECT;
+        } else {
+            /* This image will not be boot next time anyway */
+            rc = BOOT_EBADIMAGE;
+        }
+        break;
+
+    default:
+        /* Something is not OK, this should never happen */
+        assert(0);
+        rc = BOOT_EBADIMAGE;
+    }
+
+    return rc;
+}
+#else
+int
+boot_set_next(const struct flash_area *fa, bool active, bool confirm)
+{
+    struct boot_swap_state slot_state;
+    int rc;
+
+    BOOT_LOG_DBG("boot_set_next: fa %p active == %d, confirm == %d",
+                 fa, (int)active, (int)confirm);
+
+    if (active) {
+        /* The only way to set active slot for next boot is to confirm it,
+         * as DirectXIP will conclude that, since slot has not been confirmed
+         * last boot, it is bad and will remove it.
+         */
+        confirm = true;
+    }
+
+    rc = boot_read_swap_state(fa, &slot_state);
+    if (rc != 0) {
+        BOOT_LOG_DBG("boot_set_next: error %d reading state", rc);
+        return rc;
+    }
+
+    switch (slot_state.magic) {
+    case BOOT_MAGIC_UNSET:
+        /* Magic is needed for MCUboot to even consider booting an image */
+        rc = boot_write_magic(fa);
+        if (rc != 0) {
+            break;
+        }
+        /* Pass */
+
+    case BOOT_MAGIC_GOOD:
+        if (confirm) {
+            if (slot_state.copy_done == BOOT_FLAG_UNSET) {
+                /* Magic is needed for DirectXIP to even try to boot application.
+                 * DirectXIP will set copy-done flag before attempting to boot
+                 * application. Next boot, application that has copy-done flag
+                 * is expected to already have ok flag, otherwise it will be removed.
+                 */
+                rc = boot_write_copy_done(fa);
+                if (rc != 0) {
+                    break;
+                }
+            }
+
+            if (slot_state.image_ok == BOOT_FLAG_UNSET) {
+                rc = boot_write_image_ok(fa);
+                if (rc != 0) {
+                    break;
+                }
+            }
+        }
+        break;
+
+    case BOOT_MAGIC_BAD:
+        /* This image will not be boot next time anyway */
+        rc = BOOT_EBADIMAGE;
+        break;
+
+    default:
+        /* Something is not OK, this should never happen */
+        assert(0);
+        rc = BOOT_EBADSTATUS;
+    }
+
+    return rc;
+}
+#endif
 
 /*
  * This function is not used by the bootloader itself, but its required API
@@ -512,8 +690,6 @@ int
 boot_set_pending_multi(int image_index, int permanent)
 {
     const struct flash_area *fap;
-    struct boot_swap_state state_secondary_slot;
-    uint8_t swap_type;
     int rc;
 
     rc = flash_area_open(FLASH_AREA_IMAGE_SECONDARY(image_index), &fap);
@@ -521,48 +697,8 @@ boot_set_pending_multi(int image_index, int permanent)
         return BOOT_EFLASH;
     }
 
-    rc = boot_read_swap_state(fap, &state_secondary_slot);
-    if (rc != 0) {
-        goto done;
-    }
+    rc = boot_set_next(fap, false, !(permanent == 0));
 
-    switch (state_secondary_slot.magic) {
-    case BOOT_MAGIC_GOOD:
-        /* Swap already scheduled. */
-        break;
-
-    case BOOT_MAGIC_UNSET:
-        rc = boot_write_magic(fap);
-
-        if (rc == 0 && permanent) {
-            rc = boot_write_image_ok(fap);
-        }
-
-        if (rc == 0) {
-            if (permanent) {
-                swap_type = BOOT_SWAP_TYPE_PERM;
-            } else {
-                swap_type = BOOT_SWAP_TYPE_TEST;
-            }
-            rc = boot_write_swap_info(fap, swap_type, 0);
-        }
-
-        break;
-
-    case BOOT_MAGIC_BAD:
-        /* The image slot is corrupt.  There is no way to recover, so erase the
-         * slot to allow future upgrades.
-         */
-        flash_area_erase(fap, 0, flash_area_get_size(fap));
-        rc = BOOT_EBADIMAGE;
-        break;
-
-    default:
-        assert(0);
-        rc = BOOT_EBADIMAGE;
-    }
-
-done:
     flash_area_close(fap);
     return rc;
 }
@@ -599,47 +735,17 @@ int
 boot_set_confirmed_multi(int image_index)
 {
     const struct flash_area *fap = NULL;
-    struct boot_swap_state state_primary_slot;
     int rc;
 
     rc = flash_area_open(FLASH_AREA_IMAGE_PRIMARY(image_index), &fap);
     if (rc != 0) {
+        BOOT_LOG_DBG("boot_set_confirmed_multi: error %d opening image %d",
+                     rc, image_index);
         return BOOT_EFLASH;
     }
 
-    rc = boot_read_swap_state(fap, &state_primary_slot);
-    if (rc != 0) {
-        goto done;
-    }
+    rc = boot_set_next(fap, true, true);
 
-    switch (state_primary_slot.magic) {
-    case BOOT_MAGIC_GOOD:
-        /* Confirm needed; proceed. */
-        break;
-
-    case BOOT_MAGIC_UNSET:
-        /* Already confirmed. */
-        goto done;
-
-    case BOOT_MAGIC_BAD:
-        /* Unexpected state. */
-        rc = BOOT_EBADVECT;
-        goto done;
-    }
-
-    /* Intentionally do not check copy_done flag
-     * so can confirm a padded image which was programed using a programing
-     * interface.
-     */
-
-    if (state_primary_slot.image_ok != BOOT_FLAG_UNSET) {
-        /* Already confirmed. */
-        goto done;
-    }
-
-    rc = boot_write_image_ok(fap);
-
-done:
     flash_area_close(fap);
     return rc;
 }
@@ -656,4 +762,40 @@ int
 boot_set_confirmed(void)
 {
     return boot_set_confirmed_multi(0);
+}
+
+int
+boot_image_load_header(const struct flash_area *fa_p,
+                       struct image_header *hdr)
+{
+    uint32_t size = 0;
+    int rc = flash_area_read(fa_p, 0, hdr, sizeof *hdr);
+
+    BOOT_LOG_DBG("boot_image_load_header: from %p, result %d", fa_p, rc);
+
+    if (rc != 0) {
+        BOOT_LOG_ERR("Failed reading image header");
+        return BOOT_EFLASH;
+    }
+
+    if (hdr->ih_magic != IMAGE_MAGIC) {
+        BOOT_LOG_ERR("Bad image magic 0x%lx", (unsigned long)hdr->ih_magic);
+
+        return BOOT_EBADIMAGE;
+    }
+
+    if (hdr->ih_flags & IMAGE_F_NON_BOOTABLE) {
+        BOOT_LOG_ERR("Image not bootable");
+
+        return BOOT_EBADIMAGE;
+    }
+
+    if (!boot_u32_safe_add(&size, hdr->ih_img_size, hdr->ih_hdr_size) ||
+        size >= flash_area_get_size(fa_p)) {
+        BOOT_LOG_ERR("Image size bigger than designated area: %lu > %lu",
+                     (unsigned long)size, (unsigned long)flash_area_get_size(fa_p));
+        return BOOT_EBADIMAGE;
+    }
+
+    return 0;
 }

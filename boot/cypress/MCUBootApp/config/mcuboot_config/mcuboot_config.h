@@ -25,6 +25,9 @@
 #define MCUBOOT_MAX_IMG_SECTORS 2560
 #endif
 
+/* Enable non-protected TLV check against allow list */
+#define MCUBOOT_USE_TLV_ALLOW_LIST 1
+
 /*
  * Signature types
  *
@@ -36,8 +39,6 @@
 
 /* Uncomment for ECDSA signatures using curve P-256. */
 #define MCUBOOT_SIGN_EC256
-
-// #define MCUBOOT_SIGN_EC
 
 /*
  * Upgrade mode
@@ -84,6 +85,8 @@
  * See the flash APIs for more details. */
 // TODO: FWSECURITY-755
 #define MCUBOOT_USE_FLASH_AREA_GET_SECTORS
+
+#define MCUBOOT_DEV_WITH_ERASE
 
 /* Default number of separately updateable images; change in case of
  * multiple images. */

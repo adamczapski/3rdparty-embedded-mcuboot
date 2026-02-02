@@ -17,9 +17,13 @@
 #define FLASH_AREA_IMAGE_PRIMARY(x)    (((x) == 0) ?          \
                                          FLASH_AREA_IMAGE_0 : \
                                          FLASH_AREA_IMAGE_0)
+#if MYNEWT_VAL(BOOTUTIL_SINGLE_APPLICATION_SLOT)
+#define FLASH_AREA_IMAGE_SECONDARY FLASH_AREA_IMAGE_PRIMARY
+#else
 #define FLASH_AREA_IMAGE_SECONDARY(x)  (((x) == 0) ?          \
                                          FLASH_AREA_IMAGE_1 : \
                                          FLASH_AREA_IMAGE_1)
+#endif
 
 #elif (MCUBOOT_IMAGE_NUMBER == 2)
 
@@ -48,6 +52,12 @@ struct flash_sector {
 
 int flash_area_sector_from_off(off_t off, struct flash_sector *sector);
 
+static inline int flash_area_get_sector(const struct flash_area *fa, off_t off,
+    struct flash_sector *sector)
+{
+    return flash_area_sector_from_off(off, sector);
+}
+
 static inline uint8_t flash_area_get_id(const struct flash_area *fa)
 {
     return fa->fa_id;
@@ -71,6 +81,11 @@ static inline uint32_t flash_area_get_size(const struct flash_area *fa)
 static inline uint32_t flash_sector_get_off(const struct flash_sector *fs)
 {
     return fs->fs_off;
+}
+
+static inline uint32_t flash_sector_get_size(const struct flash_sector *fs)
+{
+    return fs->fs_size;
 }
 
 #endif /* __FLASH_MAP_BACKEND_H__ */

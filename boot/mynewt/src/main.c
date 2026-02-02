@@ -214,22 +214,23 @@ int flash_device_base(uint8_t fd_id, uintptr_t *ret)
 }
 
 int
-main(void)
+mynewt_main(void)
 {
     struct boot_rsp rsp;
     uintptr_t flash_base;
     int rc;
-    fih_int fih_rc = FIH_FAILURE;
+    fih_ret fih_rc = FIH_FAILURE;
 
     hal_bsp_init();
 
 #if !MYNEWT_VAL(OS_SCHEDULING) && MYNEWT_VAL(WATCHDOG_INTERVAL)
     rc = hal_watchdog_init(MYNEWT_VAL(WATCHDOG_INTERVAL));
     assert(rc == 0);
+    hal_watchdog_enable();
 #endif
 
 #if defined(MCUBOOT_SERIAL) || defined(MCUBOOT_HAVE_LOGGING) || \
-        MYNEWT_VAL(CRYPTO) || MYNEWT_VAL(HASH)
+        MYNEWT_VAL(CRYPTO) || MYNEWT_VAL(HASH) || MYNEWT_VAL(BOOT_MYNEWT_SYSINIT)
     /* initialize uart/crypto without os */
     os_dev_initialize_all(OS_DEV_INIT_PRIMARY);
     os_dev_initialize_all(OS_DEV_INIT_SECONDARY);
@@ -247,8 +248,8 @@ main(void)
     boot_preboot();
 #endif
     FIH_CALL(boot_go, fih_rc, &rsp);
-    if (fih_not_eq(fih_rc, FIH_SUCCESS)) {
-        assert(fih_int_decode(fih_rc) == FIH_POSITIVE_VALUE);
+    if (FIH_NOT_EQ(fih_rc, FIH_SUCCESS)) {
+        assert(fih_rc == FIH_SUCCESS);
         FIH_PANIC;
     }
 
@@ -264,4 +265,15 @@ main(void)
 #endif
 
     return 0;
+}
+
+/*
+ * Mynewt startup code jump to mynewt_main()
+ * This function is here for compatibility with
+ * pre 1.12. mynewt-core that still wanted main()
+ */
+int
+main(void)
+{
+    mynewt_main();
 }

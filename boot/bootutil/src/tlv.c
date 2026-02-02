@@ -3,6 +3,7 @@
  *
  * Copyright (c) 2019 JUUL Labs
  * Copyright (c) 2020 Arm Limited
+ * Copyright (c) 2025 Nordic Semiconductor ASA
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,10 +19,14 @@
  */
 
 #include <stddef.h>
+#include <inttypes.h>
 
 #include "bootutil/bootutil.h"
+#include "bootutil/bootutil_log.h"
 #include "bootutil/image.h"
 #include "bootutil_priv.h"
+
+BOOT_LOG_MODULE_DECLARE(mcuboot);
 
 /*
  * Initialize a TLV iterator.
@@ -42,11 +47,18 @@ bootutil_tlv_iter_begin(struct image_tlv_iter *it, const struct image_header *hd
     uint32_t off_;
     struct image_tlv_info info;
 
+    BOOT_LOG_DBG("bootutil_tlv_iter_begin: type %d, prot == %d", type, (int)prot);
+
     if (it == NULL || hdr == NULL || fap == NULL) {
         return -1;
     }
 
+#if defined(MCUBOOT_SWAP_USING_OFFSET)
+    off_ = BOOT_TLV_OFF(hdr) + it->start_off;
+#else
     off_ = BOOT_TLV_OFF(hdr);
+#endif
+
     if (LOAD_IMAGE_DATA(hdr, fap, off_, &info, sizeof(info))) {
         return -1;
     }
@@ -102,6 +114,10 @@ bootutil_tlv_iter_next(struct image_tlv_iter *it, uint32_t *off, uint16_t *len,
         return -1;
     }
 
+    BOOT_LOG_DBG("bootutil_tlv_iter_next: searching for %d (%d is any) "
+                 "starting at %" PRIu32 " ending at %" PRIu32,
+                 it->type, IMAGE_TLV_ANY, it->tlv_off, it->tlv_end);
+
     while (it->tlv_off < it->tlv_end) {
         if (it->hdr->ih_protect_tlv_size > 0 && it->tlv_off == it->prot_end) {
             it->tlv_off += sizeof(struct image_tlv_info);
@@ -109,11 +125,15 @@ bootutil_tlv_iter_next(struct image_tlv_iter *it, uint32_t *off, uint16_t *len,
 
         rc = LOAD_IMAGE_DATA(it->hdr, it->fap, it->tlv_off, &tlv, sizeof tlv);
         if (rc) {
+            BOOT_LOG_DBG("bootutil_tlv_iter_next: load failed with %d for %p "
+                         "%" PRIu32,
+                         rc, it->fap, it->tlv_off);
             return -1;
         }
 
         /* No more TLVs in the protected area */
         if (it->prot && it->tlv_off >= it->prot_end) {
+            BOOT_LOG_DBG("bootutil_tlv_iter_next: protected TLV %d not found", it->type);
             return 1;
         }
 
@@ -124,11 +144,35 @@ bootutil_tlv_iter_next(struct image_tlv_iter *it, uint32_t *off, uint16_t *len,
             *off = it->tlv_off + sizeof(tlv);
             *len = tlv.it_len;
             it->tlv_off += sizeof(tlv) + tlv.it_len;
+            BOOT_LOG_DBG("bootutil_tlv_iter_next: TLV %d found at %" PRIu32
+                         " (size %d)",
+                         tlv.it_type, *off, *len);
             return 0;
         }
 
         it->tlv_off += sizeof(tlv) + tlv.it_len;
     }
 
+    BOOT_LOG_DBG("bootutil_tlv_iter_next: TLV %d not found", it->type);
     return 1;
+}
+
+/*
+ * Return if a TLV entry is in the protected area.
+ *
+ * @param it The image TLV iterator struct
+ * @param off The offset of the entry to check.
+ *
+ * @return 0 if this TLV iterator entry is not protected.
+ *         1 if this TLV iterator entry is in the protected region
+ *         -1 if the iterator is invalid.
+ */
+int
+bootutil_tlv_iter_is_prot(struct image_tlv_iter *it, uint32_t off)
+{
+    if (it == NULL || it->hdr == NULL || it->fap == NULL) {
+        return -1;
+    }
+
+    return off < it->prot_end;
 }
